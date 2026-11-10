@@ -16,7 +16,7 @@
   h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
   .sub { color: var(--muted); }
   main { padding: 10px 24px 28px; display: grid; gap: 16px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
   .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   .kpi .value { font-size: 23px; font-weight: 650; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -85,16 +85,12 @@
     <h2><span id="day-title"></span>
       <span class="nav"><button id="prev">&larr; Previous day</button> <button id="next">Next day &rarr;</button></span>
     </h2>
-    <div class="grid2">
-      <div>
-        <h3>CPU usage</h3><div class="chart" id="d-cpu"></div>
-        <h3>RAM usage</h3><div class="chart" id="d-ram"></div>
-        <h3>Load average</h3><div class="chart" id="d-load"></div>
-      </div>
-      <div>
-        <h3>Top processes by CPU</h3><div class="scroll" id="d-top-cpu"></div>
-        <h3>Top processes by RAM</h3><div class="scroll" id="d-top-mem"></div>
-      </div>
+    <h3>CPU usage</h3><div class="chart" id="d-cpu"></div>
+    <h3>RAM usage</h3><div class="chart" id="d-ram"></div>
+    <h3>Load average</h3><div class="chart" id="d-load"></div>
+    <div class="grid2" style="margin-top:14px">
+      <div><h3>Top processes by CPU</h3><div class="scroll" id="d-top-cpu"></div></div>
+      <div><h3>Top processes by RAM</h3><div class="scroll" id="d-top-mem"></div></div>
     </div>
   </section>
 
@@ -124,12 +120,13 @@ const when = (ts) => (ts == null ? "" : dayName(ts) + ", " + hm(ts));
 const pct = (v, dp = 1) => (v == null ? "–" : v.toFixed(dp) + "%");
 const ld = (v) => (v == null ? "–" : v.toFixed(2));
 const kb = (v) => (v == null ? "–" : v >= 1048576 ? (v / 1048576).toFixed(2) + " GiB" : Math.round(v / 1024) + " MiB");
+const axisPct = (v) => +v.toFixed(1) + "%";
 const mins = (m) => (m < 60 ? m + " min" : Math.floor(m / 60) + " h " + pad(m % 60) + " min");
 
 function niceMax(v, floor) {
   v = Math.max(v || 0, floor);
   const p = Math.pow(10, Math.floor(Math.log10(v)));
-  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+  for (const m of [1, 1.2, 1.6, 2, 2.4, 3, 4, 6, 8, 10]) if (m * p >= v) return m * p;  // 4 even steps
   return 10 * p;
 }
 
@@ -224,7 +221,7 @@ function charts(prefix, pts, x0, x1, ticks) {
   const cpuMax = niceMax(Math.max(...pts.map((p) => p[2] || 0)), 10);
   const cpuMaxCapped = Math.min(100, cpuMax);
   lineChart($(prefix + "-cpu"), {
-    x0, x1, ticks, yMax: cpuMaxCapped, fmt: (v) => Math.round(v) + "%",
+    x0, x1, ticks, yMax: cpuMaxCapped, fmt: axisPct,
     ref: D.cpu_alert, refLabel: "alert " + D.cpu_alert + "%",
     band: pts.map((p) => [p[0], p[1], p[2]]), bandColor: C.cpu,
     series: [{ color: C.cpu, pts: pts.map((p) => [p[0], p[1]]) }],
@@ -232,7 +229,7 @@ function charts(prefix, pts, x0, x1, ticks) {
   });
   const ramMax = Math.min(100, niceMax(Math.max(...pts.map((p) => p[3] || 0)), 10));
   lineChart($(prefix + "-ram"), {
-    x0, x1, ticks, yMax: ramMax, fmt: (v) => Math.round(v) + "%",
+    x0, x1, ticks, yMax: ramMax, fmt: axisPct,
     ref: D.ram_alert, refLabel: "alert " + D.ram_alert + "%",
     series: [{ color: C.ram, pts: pts.map((p) => [p[0], p[3]]) }],
     tip: (i) => `RAM ${pct(pts[i][3])} · ${kb(pts[i][4])}`,
