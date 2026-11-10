@@ -168,6 +168,20 @@ class SummaryTest(unittest.TestCase):
             self.assertNotIn("</script><b>", html)
             self.assertNotIn("/*__DATA__*/", html)
 
+    def test_html_command_through_symlink(self):
+        # install.sh runs the CLI as /usr/local/bin/srvmon -> /opt/srvmon/srvmon.py
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            link = os.path.join(tmp, "srvmon")
+            os.symlink(os.path.abspath(srvmon.__file__), link)
+            out = os.path.join(tmp, "out.html")
+            env = dict(os.environ, SRVMON_DB_PATH=os.path.join(tmp, "db.sqlite"),
+                       SRVMON_CONFIG=os.path.join(tmp, "none.conf"))
+            subprocess.run([sys.executable, link, "html", "--out", out],
+                           env=env, check=True, capture_output=True)
+            with open(out) as fh:
+                self.assertIn("<!doctype html>", fh.read())
+
 
 if __name__ == "__main__":
     unittest.main()

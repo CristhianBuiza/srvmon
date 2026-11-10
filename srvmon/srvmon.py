@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 CONFIG_PATH = "/etc/srvmon.conf"
 DEFAULTS = {
@@ -833,7 +833,7 @@ def process_tables(top_cpu, top_mem, with_day):
 
 
 def render_html(data):
-    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+    template_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "dashboard.html")
     with open(template_path) as fh:
         template = fh.read()
     payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
