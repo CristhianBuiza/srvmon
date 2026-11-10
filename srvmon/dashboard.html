@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>srvmon · __TITLE__</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --ink: #18212b; --muted: #687482; --line: #e2e6eb;
+    --soft: #f0f3f6; --cpu: #2563eb; --ram: #8b3fd9; --load: #e2620f; --warn: #c62828;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+  header { padding: 20px 24px 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); }
+  main { padding: 10px 24px 28px; display: grid; gap: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .kpi .value { font-size: 23px; font-weight: 650; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi .note { color: var(--muted); font-size: 12px; }
+  .kpi.cpu { border-top: 3px solid var(--cpu); } .kpi.ram { border-top: 3px solid var(--ram); }
+  .kpi.load { border-top: 3px solid var(--load); } .kpi.cov { border-top: 3px solid #9aa5b1; }
+  h2 { font-size: 15px; margin: 0 0 10px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+  h3 { font-size: 13px; margin: 14px 0 4px; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+  h3:first-of-type { margin-top: 0; }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { font-size: 11px; fill: var(--muted); }
+  .tip { position: absolute; pointer-events: none; background: #111827; color: #fff; font-size: 12px; padding: 6px 9px;
+         border-radius: 6px; white-space: nowrap; display: none; z-index: 2; box-shadow: 0 4px 12px rgba(0,0,0,.18); }
+  .tip b { font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); font-weight: 400; }
+  .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td small { color: var(--muted); }
+  td.name { text-align: left; max-width: 260px; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  tr.day { cursor: pointer; } tr.day:hover { background: var(--soft); } tr.day.sel { background: #e7eefc; }
+  .hot { color: var(--warn); font-weight: 600; }
+  .cov-bar { display: inline-block; width: 46px; height: 6px; background: var(--line); border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+  .cov-bar span { display: block; height: 100%; background: #9aa5b1; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+  .grid2 > div { min-width: 0; }
+  .nav button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+  .nav button:disabled { opacity: .4; cursor: default; }
+  .meter { display: inline-block; height: 6px; border-radius: 3px; vertical-align: middle; margin-left: 6px; }
+  .empty { color: var(--muted); padding: 10px 0; }
+  footer { color: var(--muted); font-size: 12px; padding: 0 24px 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <span class="sub" id="subtitle"></span>
+</header>
+<main>
+  <div class="cards" id="kpis"></div>
+
+  <section class="card">
+    <h2><span id="week-title"></span>
+      <span class="legend">
+        <span><i style="background:var(--cpu)"></i>CPU %</span>
+        <span><i style="background:var(--cpu);opacity:.25;height:8px"></i>CPU peak in 10 min</span>
+        <span><i style="background:var(--ram)"></i>RAM used %</span>
+        <span><i style="background:var(--load)"></i>Load 1 / 5 / 15 min</span>
+      </span>
+    </h2>
+    <h3>CPU usage</h3><div class="chart" id="w-cpu"></div>
+    <h3>RAM usage</h3><div class="chart" id="w-ram"></div>
+    <h3><span>Load average</span><span id="w-cores"></span></h3><div class="chart" id="w-load"></div>
+  </section>
+
+  <section class="card">
+    <h2>Day by day <span class="legend">Click a day for its detail below. Peaks are the highest sample.</span></h2>
+    <div class="scroll"><table id="days"></table></div>
+  </section>
+
+  <section class="card" id="day-section">
+    <h2><span id="day-title"></span>
+      <span class="nav"><button id="prev">&larr; Previous day</button> <button id="next">Next day &rarr;</button></span>
+    </h2>
+    <div class="grid2">
+      <div>
+        <h3>CPU usage</h3><div class="chart" id="d-cpu"></div>
+        <h3>RAM usage</h3><div class="chart" id="d-ram"></div>
+        <h3>Load average</h3><div class="chart" id="d-load"></div>
+      </div>
+      <div>
+        <h3>Top processes by CPU</h3><div class="scroll" id="d-top-cpu"></div>
+        <h3>Top processes by RAM</h3><div class="scroll" id="d-top-mem"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 id="win-procs-title"></h2>
+    <div class="grid2">
+      <div><h3>By CPU</h3><div class="scroll" id="w-top-cpu"></div></div>
+      <div><h3>By RAM</h3><div class="scroll" id="w-top-mem"></div></div>
+    </div>
+  </section>
+</main>
+<footer id="footer"></footer>
+
+<script>
+const D = /*__DATA__*/null;
+const C = { cpu: "#2563eb", ram: "#8b3fd9", load: "#e2620f" };
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pad = (n) => (n < 10 ? "0" : "") + n;
+// Times are shown in the server's time zone, not the viewer's.
+const sd = (ts) => new Date((ts + D.tz_offset) * 1000);
+const hm = (ts) => { const d = sd(ts); return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()); };
+const dayName = (ts) => { const d = sd(ts); return DOW[d.getUTCDay()] + " " + MON[d.getUTCMonth()] + " " + d.getUTCDate(); };
+const when = (ts) => (ts == null ? "" : dayName(ts) + ", " + hm(ts));
+const pct = (v, dp = 1) => (v == null ? "–" : v.toFixed(dp) + "%");
+const ld = (v) => (v == null ? "–" : v.toFixed(2));
+const kb = (v) => (v == null ? "–" : v >= 1048576 ? (v / 1048576).toFixed(2) + " GiB" : Math.round(v / 1024) + " MiB");
+const mins = (m) => (m < 60 ? m + " min" : Math.floor(m / 60) + " h " + pad(m % 60) + " min");
+
+function niceMax(v, floor) {
+  v = Math.max(v || 0, floor);
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+// series: [{color, pts: [[t, v]], width, dash, opacity}], band: [[t, lo, hi]]
+function lineChart(el, o) {
+  const W = 960, H = o.h || 150, L = 46, R = 10, T = 8, B = 22;
+  const x = (t) => L + (t - o.x0) / (o.x1 - o.x0) * (W - L - R);
+  const y = (v) => T + (1 - v / o.yMax) * (H - T - B);
+  const gap = (D.bucket || 600) * 2.5;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = o.yMax * i / 4, yy = y(v);
+    s += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e8ebef"/>`;
+    s += `<text x="${L - 6}" y="${yy + 4}" text-anchor="end">${o.fmt(v)}</text>`;
+  }
+  for (const tk of o.ticks) {
+    const xx = x(tk.t);
+    if (xx < L - 1 || xx > W - R + 1) continue;
+    if (tk.line) s += `<line x1="${xx}" x2="${xx}" y1="${T}" y2="${H - B}" stroke="#d5dae0" stroke-dasharray="3 3"/>`;
+    s += `<text x="${xx + (tk.offset || 0)}" y="${H - 6}" text-anchor="${tk.anchor || "middle"}">${tk.label}</text>`;
+  }
+  if (o.ref != null && o.ref <= o.yMax) {
+    s += `<line x1="${L}" x2="${W - R}" y1="${y(o.ref)}" y2="${y(o.ref)}" stroke="${o.refColor || "#c62828"}" stroke-dasharray="5 4" opacity=".55"/>`;
+    s += `<text x="${W - R}" y="${y(o.ref) - 4}" text-anchor="end" style="fill:${o.refColor || "#c62828"}">${o.refLabel}</text>`;
+  }
+  if (o.band && o.band.length) {
+    let seg = [];
+    const flush = () => {
+      if (seg.length > 1) {
+        const top = seg.map((p) => `${x(p[0]).toFixed(1)},${y(p[2]).toFixed(1)}`);
+        const bot = seg.slice().reverse().map((p) => `${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`);
+        s += `<polygon points="${top.concat(bot).join(" ")}" fill="${o.bandColor}" opacity=".16"/>`;
+      }
+      seg = [];
+    };
+    o.band.forEach((p, i) => {
+      if (p[1] == null || p[2] == null) return flush();
+      if (seg.length && p[0] - seg[seg.length - 1][0] > gap) flush();
+      seg.push(p);
+    });
+    flush();
+  }
+  for (const se of o.series) {
+    let d = "", prev = null;
+    for (const p of se.pts) {
+      if (p[1] == null) { prev = null; continue; }
+      d += (prev == null || p[0] - prev > gap ? "M" : "L") + x(p[0]).toFixed(1) + " " + y(Math.min(p[1], o.yMax)).toFixed(1);
+      prev = p[0];
+    }
+    s += `<path d="${d}" fill="none" stroke="${se.color}" stroke-width="${se.width || 1.6}" stroke-linejoin="round" ${se.dash ? `stroke-dasharray="${se.dash}"` : ""} opacity="${se.opacity || 1}"/>`;
+  }
+  if (!o.series.some((se) => se.pts.some((p) => p[1] != null)))
+    s += `<text x="${(L + W - R) / 2}" y="${H / 2}" text-anchor="middle">No data in this range</text>`;
+  s += `<line class="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="#18212b" opacity="0" />`;
+  s += `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg><div class="tip"></div>`;
+  el.innerHTML = s;
+
+  const svg = el.querySelector("svg"), tip = el.querySelector(".tip"), cross = el.querySelector(".cross");
+  const base = o.series[0].pts;
+  svg.addEventListener("mousemove", (ev) => {
+    const r = svg.getBoundingClientRect(), k = W / r.width;
+    const t = o.x0 + ((ev.clientX - r.left) * k - L) / (W - L - R) * (o.x1 - o.x0);
+    let lo = 0, hi = base.length - 1;
+    if (hi < 0) return;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (base[m][0] < t) lo = m + 1; else hi = m; }
+    if (lo > 0 && t - base[lo - 1][0] < base[lo][0] - t) lo--;
+    const pt = base[lo];
+    if (Math.abs(pt[0] - t) > gap) { tip.style.display = "none"; cross.setAttribute("opacity", 0); return; }
+    const xx = x(pt[0]);
+    cross.setAttribute("x1", xx); cross.setAttribute("x2", xx); cross.setAttribute("opacity", .25);
+    tip.innerHTML = `<b>${when(pt[0])}</b><br>` + o.tip(lo);
+    tip.style.display = "block";
+    const px = xx / k, w = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(0, px + 12), r.width - w) + "px";
+    tip.style.top = "4px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.setAttribute("opacity", 0); });
+}
+
+function dayTicks(x0, x1) {
+  return D.days.map((d) => ({ t: d.start, line: true, label: dayName(d.start), anchor: "start", offset: 4 }))
+    .filter((tk) => tk.t >= x0 && tk.t < x1 - 3600 * 3);
+}
+function hourTicks(x0) {
+  const out = [];
+  for (let h = 0; h <= 24; h += 3) out.push({ t: x0 + h * 3600, line: h > 0 && h < 24, label: pad(h % 24) + ":00",
+    anchor: h === 0 ? "start" : h === 24 ? "end" : "middle" });
+  return out;
+}
+
+function charts(prefix, pts, x0, x1, ticks) {
+  const cpuMax = niceMax(Math.max(...pts.map((p) => p[2] || 0)), 10);
+  const cpuMaxCapped = Math.min(100, cpuMax);
+  lineChart($(prefix + "-cpu"), {
+    x0, x1, ticks, yMax: cpuMaxCapped, fmt: (v) => Math.round(v) + "%",
+    ref: D.cpu_alert, refLabel: "alert " + D.cpu_alert + "%",
+    band: pts.map((p) => [p[0], p[1], p[2]]), bandColor: C.cpu,
+    series: [{ color: C.cpu, pts: pts.map((p) => [p[0], p[1]]) }],
+    tip: (i) => `CPU ${pct(pts[i][1])} <small>(peak ${pct(pts[i][2])})</small>`,
+  });
+  const ramMax = Math.min(100, niceMax(Math.max(...pts.map((p) => p[3] || 0)), 10));
+  lineChart($(prefix + "-ram"), {
+    x0, x1, ticks, yMax: ramMax, fmt: (v) => Math.round(v) + "%",
+    ref: D.ram_alert, refLabel: "alert " + D.ram_alert + "%",
+    series: [{ color: C.ram, pts: pts.map((p) => [p[0], p[3]]) }],
+    tip: (i) => `RAM ${pct(pts[i][3])} · ${kb(pts[i][4])}`,
+  });
+  const loadMax = niceMax(Math.max(D.cores || 1, ...pts.map((p) => Math.max(p[5] || 0, p[6] || 0, p[7] || 0))), 1);
+  lineChart($(prefix + "-load"), {
+    x0, x1, ticks, yMax: loadMax, fmt: (v) => v.toFixed(loadMax < 4 ? 1 : 0),
+    ref: D.cores, refLabel: D.cores + " cores", refColor: "#687482",
+    series: [
+      { color: C.load, pts: pts.map((p) => [p[0], p[5]]) },
+      { color: C.load, pts: pts.map((p) => [p[0], p[6]]), opacity: .55, dash: "4 3", width: 1.3 },
+      { color: C.load, pts: pts.map((p) => [p[0], p[7]]), opacity: .35, width: 1.3 },
+    ],
+    tip: (i) => `Load ${ld(pts[i][5])} / ${ld(pts[i][6])} / ${ld(pts[i][7])}`,
+  });
+}
+
+function procTable(list, kind, withDay) {
+  if (!list.length) return `<div class="empty">No process data in this range yet. Process usage is recorded by the srvmon collector (sysstat backfill has none).</div>`;
+  const fmtAt = (ts) => (withDay ? when(ts) : hm(ts));
+  if (kind === "cpu") {
+    const top = list[0].cpu_avg || 1;
+    return `<table><tr><th>Process</th><th>Avg CPU</th><th>Peak</th><th>Peak at</th></tr>` + list.map((p) =>
+      `<tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td><td>${pct(p.cpu_avg, 2)}<span class="meter" style="width:${Math.max(2, 50 * p.cpu_avg / top)}px;background:var(--cpu)"></span></td>` +
+      `<td>${pct(p.cpu_max)}</td><td><small>${fmtAt(p.cpu_max_at)}</small></td></tr>`).join("") + `</table>`;
+  }
+  const top = list[0].rss_avg_kb || 1;
+  return `<table><tr><th>Process</th><th>Avg RAM</th><th>Peak</th><th>Peak at</th><th>Procs</th></tr>` + list.map((p) =>
+    `<tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td><td>${kb(p.rss_avg_kb)}<span class="meter" style="width:${Math.max(2, 50 * p.rss_avg_kb / top)}px;background:var(--ram)"></span></td>` +
+    `<td>${kb(p.rss_max_kb)}</td><td><small>${fmtAt(p.rss_max_at)}</small></td><td>${p.nproc_max}</td></tr>`).join("") + `</table>`;
+}
+
+function kpi(cls, label, value, note) {
+  return `<div class="card kpi ${cls}"><div class="label">${label}</div><div class="value" title="${esc(value)}">${value}</div><div class="note">${note}</div></div>`;
+}
+
+function render() {
+  const o = D.overall, days = D.days;
+  $("title").textContent = D.label;
+  $("subtitle").textContent = `${D.cores} cores · ${kb(D.mem_total_kb)} RAM · last ${D.window_days} days · times in ${D.tz_name} (UTC${D.tz_offset >= 0 ? "+" : "-"}${pad(Math.floor(Math.abs(D.tz_offset) / 3600))}:${pad(Math.abs(D.tz_offset) % 3600 / 60)})`;
+  const tc = D.top_cpu[0], tm = D.top_mem[0];
+  $("kpis").innerHTML =
+    kpi("cpu", "CPU average", pct(o.cpu_avg), `p95 ${pct(o.cpu_p95)} · peak ${pct(o.cpu_max)} ${o.cpu_max_at ? "on " + when(o.cpu_max_at) : ""}`) +
+    kpi("cpu", `Time CPU ≥ ${D.cpu_alert}%`, mins(o.cpu_alert_min), `over the last ${D.window_days} days`) +
+    kpi("load", "Load average (1 min)", ld(o.load1_avg), `peak ${ld(o.load1_max)} ${o.load1_max_at ? "on " + when(o.load1_max_at) : ""} · ${D.cores} cores`) +
+    kpi("ram", "RAM average", pct(o.mem_avg), `${kb(o.mem_kb_avg)} of ${kb(D.mem_total_kb)} · peak ${pct(o.mem_max)}`) +
+    kpi("cpu", "Top CPU process", tc ? esc(tc.name) : "–", tc ? `avg ${pct(tc.cpu_avg, 2)} · peak ${pct(tc.cpu_max)}` : "no process data yet") +
+    kpi("ram", "Top RAM process", tm ? esc(tm.name) : "–", tm ? `avg ${kb(tm.rss_avg_kb)} · peak ${kb(tm.rss_max_kb)}` : "no process data yet") +
+    kpi("cov", "Data coverage", pct(o.coverage, 0), `${o.samples.toLocaleString()} samples · ${D.counts.native.toLocaleString()} collector, ${D.counts.sysstat.toLocaleString()} sysstat`);
+
+  $("week-title").textContent = `Last ${D.window_days} days`;
+  $("w-cores").textContent = `dashed grey line = ${D.cores} cores (load above it means work is queueing)`;
+  charts("w", D.series, D.start, D.end, dayTicks(D.start, D.end));
+
+  const hot = (v, lim) => (v != null && v >= lim ? ' class="hot"' : "");
+  $("days").innerHTML = `<tr><th>Day</th><th>Coverage</th><th>CPU avg</th><th>CPU p95</th><th>CPU peak</th><th>≥ ${D.cpu_alert}%</th>` +
+    `<th>Load avg</th><th>Load peak</th><th>RAM avg</th><th>RAM peak</th><th style="text-align:left">Top CPU</th><th style="text-align:left">Top RAM</th></tr>` +
+    days.map((d, i) => `<tr class="day" data-i="${i}"><td>${dayName(d.start)}</td>` +
+      `<td><span class="cov-bar"><span style="width:${d.coverage}%"></span></span>${Math.round(d.coverage)}%</td>` +
+      `<td>${pct(d.cpu_avg)}</td><td>${pct(d.cpu_p95)}</td><td${hot(d.cpu_max, D.cpu_alert)}>${pct(d.cpu_max)} <small>${d.cpu_max_at ? hm(d.cpu_max_at) : ""}</small></td>` +
+      `<td>${d.cpu_alert_min ? mins(d.cpu_alert_min) : "–"}</td>` +
+      `<td>${ld(d.load1_avg)}</td><td${hot(d.load1_max, D.cores)}>${ld(d.load1_max)} <small>${d.load1_max_at ? hm(d.load1_max_at) : ""}</small></td>` +
+      `<td>${pct(d.mem_avg)}</td><td${hot(d.mem_max, D.ram_alert)}>${pct(d.mem_max)} <small>${d.mem_max_at ? hm(d.mem_max_at) : ""}</small></td>` +
+      `<td class="name">${d.top_cpu[0] ? esc(d.top_cpu[0].name) : "–"}</td><td class="name">${d.top_mem[0] ? esc(d.top_mem[0].name) : "–"}</td></tr>`).join("");
+  document.querySelectorAll("tr.day").forEach((tr) => tr.addEventListener("click", () => selectDay(+tr.dataset.i, true)));
+
+  $("win-procs-title").textContent = `Top processes, last ${D.window_days} days`;
+  $("w-top-cpu").innerHTML = procTable(D.top_cpu, "cpu", true);
+  $("w-top-mem").innerHTML = procTable(D.top_mem, "mem", true);
+  $("footer").textContent = `srvmon ${D.version} · generated ${when(D.generated_at)} · retention ${D.retention_days} days · ` +
+    `CPU % is the share of all ${D.cores} cores; process RAM is resident memory (RSS) summed over processes with the same name.`;
+
+  const fromHash = days.findIndex((d) => "#" + d.date === location.hash);
+  selectDay(fromHash >= 0 ? fromHash : days.length - 1, false);
+}
+
+let current = -1;
+function selectDay(i, scroll) {
+  const days = D.days;
+  if (i < 0 || i >= days.length) return;
+  current = i;
+  const d = days[i];
+  document.querySelectorAll("tr.day").forEach((tr) => tr.classList.toggle("sel", +tr.dataset.i === i));
+  $("day-title").textContent = `${dayName(d.start)}: CPU avg ${pct(d.cpu_avg)}, RAM avg ${pct(d.mem_avg)}, load peak ${ld(d.load1_max)}`;
+  $("prev").disabled = i === 0;
+  $("next").disabled = i === days.length - 1;
+  const pts = D.series.filter((p) => p[0] >= d.start && p[0] < d.end);
+  charts("d", pts, d.start, d.end, hourTicks(d.start));
+  $("d-top-cpu").innerHTML = procTable(d.top_cpu, "cpu", false);
+  $("d-top-mem").innerHTML = procTable(d.top_mem, "mem", false);
+  if (history.replaceState) history.replaceState(null, "", "#" + d.date);
+  if (scroll) $("day-section").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+$("prev").addEventListener("click", () => selectDay(current - 1, false));
+$("next").addEventListener("click", () => selectDay(current + 1, false));
+
+render();
+</script>
+</body>
+</html>

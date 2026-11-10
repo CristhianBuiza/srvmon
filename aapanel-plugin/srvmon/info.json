@@ -1,0 +1,10 @@
+{
+  "title": "Server Monitor (srvmon)",
+  "name": "srvmon",
+  "type": "plugin",
+  "ps": "CPU, load average, RAM and top processes by CPU and RAM, minute by minute, with a rolling 7-day history and daily breakdown.",
+  "versions": "1.0",
+  "checks": "/www/server/panel/plugin/srvmon",
+  "author": "srvmon",
+  "home": "https://github.com/CristhianBuiza/srvmon"
+}
