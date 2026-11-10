@@ -323,7 +323,7 @@ function selectDay(i, scroll) {
   charts("d", pts, d.start, d.end, hourTicks(d.start));
   $("d-top-cpu").innerHTML = procTable(d.top_cpu, "cpu", false);
   $("d-top-mem").innerHTML = procTable(d.top_mem, "mem", false);
-  if (history.replaceState) history.replaceState(null, "", "#" + d.date);
+  try { history.replaceState(null, "", "#" + d.date); } catch (e) { /* srcdoc iframes have no URL to update */ }
   if (scroll) $("day-section").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 $("prev").addEventListener("click", () => selectDay(current - 1, false));

@@ -33,9 +33,18 @@
     $status.text(text).toggleClass("err", !!isError);
   }
 
+  // The panel opens plugins in a 700px layui layer; give the dashboard most of the screen.
   function fit() {
-    var top = $("#srvmon-frame").offset() ? $("#srvmon-frame").offset().top : 160;
-    $("#srvmon-frame").css("height", Math.max(480, $(window).height() - top - 40) + "px");
+    var $win = $(window), $layer = $("#srvmon-plugin").closest(".layui-layer");
+    var width = Math.min(1360, $win.width() - 40), height = $win.height() - 40;
+    if ($layer.length) {
+      $layer.css({ width: width + "px", height: height + "px", left: ($win.width() - width) / 2 + "px", top: "20px" });
+      var titleHeight = $layer.find(".layui-layer-title").outerHeight() || 0;
+      $layer.find(".layui-layer-content").css({ height: height - titleHeight + "px", overflow: "auto" });
+      height -= titleHeight;
+    }
+    var barHeight = $("#srvmon-plugin .srvmon-bar").outerHeight(true) || 50;
+    $("#srvmon-frame").css("height", Math.max(420, height - barHeight - 30) + "px");
   }
 
   function fillDays(retention) {
@@ -82,6 +91,7 @@
     });
   });
   $(window).on("resize", fit);
+  fit();
   load();
 })();
 </script>
