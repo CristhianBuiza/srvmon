@@ -58,6 +58,7 @@
 <header>
   <h1 id="title"></h1>
   <span class="sub" id="subtitle"></span>
+  <a id="export-link" hidden style="margin-left:auto;font-size:13px">Export for AI (.md)</a>
 </header>
 <main>
   <div class="cards" id="kpis"></div>
@@ -270,6 +271,11 @@ function render() {
   const o = D.overall, days = D.days;
   $("title").textContent = D.label;
   $("subtitle").textContent = `${D.cores} cores · ${kb(D.mem_total_kb)} RAM · last ${D.window_days} days · times in ${D.tz_name} (UTC${D.tz_offset >= 0 ? "+" : "-"}${pad(Math.floor(Math.abs(D.tz_offset) / 3600))}:${pad(Math.abs(D.tz_offset) % 3600 / 60)})`;
+  if (/^https?:$/.test(location.protocol)) {
+    // Only `srvmon serve` has the endpoint; saved files and the panel iframe do not.
+    $("export-link").href = "export.md" + location.search;
+    $("export-link").hidden = false;
+  }
   const tc = D.top_cpu[0], tm = D.top_mem[0];
   $("kpis").innerHTML =
     kpi("cpu", "CPU average", pct(o.cpu_avg), `p95 ${pct(o.cpu_p95)} · peak ${pct(o.cpu_max)} ${o.cpu_max_at ? "on " + when(o.cpu_max_at) : ""}`) +

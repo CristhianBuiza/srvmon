@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 CONFIG_PATH = "/etc/srvmon.conf"
 DEFAULTS = {
@@ -688,6 +688,8 @@ def summarize(cfg, conn, days=None, now=None):
     counts = dict((src, n) for src, n in conn.execute(
         "SELECT source, COUNT(*) FROM samples GROUP BY source"))
     first_last = conn.execute("SELECT MIN(ts), MAX(ts) FROM samples").fetchone()
+    first_native = conn.execute(
+        "SELECT MIN(ts) FROM samples WHERE source = 'native'").fetchone()[0]
     mem_total = rows[-1]["mem_total_kb"] if rows and rows[-1]["mem_total_kb"] else meta_get(
         conn, "mem_total_kb")
     return {
@@ -711,6 +713,7 @@ def summarize(cfg, conn, days=None, now=None):
         "counts": {"native": counts.get("native", 0), "sysstat": counts.get("sysstat", 0)},
         "first_ts": first_last[0],
         "last_ts": first_last[1],
+        "first_native_ts": first_native,
         "overall": overall,
         "top_cpu": top_cpu,
         "top_mem": top_mem,
@@ -832,6 +835,155 @@ def process_tables(top_cpu, top_mem, with_day):
     return out
 
 
+EXPORT_STEPS = {"hour": 3600, "10min": BUCKET}
+
+
+def fmt_stamp(ts):
+    return "-" if ts is None else time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def fmt_utc_offset(seconds):
+    return "UTC%s%02d:%02d" % ("+" if seconds >= 0 else "-", abs(seconds) // 3600,
+                               abs(seconds) % 3600 // 60)
+
+
+def md_cell(text):
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def md_table(header, rows):
+    out = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+    out.extend("| " + " | ".join(md_cell(c) for c in row) + " |" for row in rows)
+    return out
+
+
+def resample(series, step):
+    """Average 10-minute buckets into `step`-second rows aligned to local time."""
+    if step <= BUCKET:
+        return [list(p) for p in series]
+    groups = {}
+    for p in series:
+        key = p[0] - (p[0] + time.localtime(p[0]).tm_gmtoff) % step
+        groups.setdefault(key, []).append(p)
+    rows = []
+    for key in sorted(groups):
+        row = [key]
+        for i in range(1, 8):
+            values = [p[i] for p in groups[key] if p[i] is not None]
+            if not values:
+                row.append(None)
+            elif i == 2:
+                row.append(max(values))
+            else:
+                avg = sum(values) / len(values)
+                row.append(int(avg) if i == 4 else _round(avg))
+        rows.append(row)
+    return rows
+
+
+def export_filename(data):
+    label = re.sub(r"[^A-Za-z0-9._-]+", "-", data["label"]).strip("-") or "server"
+    return "srvmon-%s-%s.md" % (label, time.strftime("%Y%m%d-%H%M", time.localtime(data["end"])))
+
+
+def export_markdown(data, detail="hour"):
+    """Self-contained Markdown export, meant to be pasted into an AI chat as context."""
+    o, cores = data["overall"], data["cores"]
+    n = lambda v, fmt="%.1f": "" if v is None else fmt % v
+    peak = lambda v, ts, f: "%s at %s" % (f(v), fmt_stamp(ts)) if v is not None else "-"
+    out = [
+        "# Server monitoring export: %s" % data["label"],
+        "",
+        "Exported by srvmon %s on %s. Covers the last %d days, %s to %s, server local time (%s)." % (
+            data["version"], fmt_stamp(data["generated_at"]), data["window_days"],
+            fmt_stamp(data["start"]), fmt_stamp(data["end"]), fmt_utc_offset(data["tz_offset"])),
+        "",
+        "## Server",
+        "",
+        "- Label: %s (hostname %s)" % (data["label"], data["hostname"]),
+        "- CPU cores: %s. RAM: %s." % (cores, fmt_kb(data["mem_total_kb"])),
+        "- Samples in this window: %d, %.0f%% coverage. Collector samples are taken every minute; "
+        "samples imported from sysstat are usually 10-minute averages." % (o["samples"], o["coverage"]),
+        "- Per-process data starts at %s (only the srvmon collector records processes)." % (
+            fmt_stamp(data["first_native_ts"]) if data["first_native_ts"] else "no point yet"),
+        "- Data older than %d days is deleted automatically." % data["retention_days"],
+        "",
+        "## How to read the numbers",
+        "",
+        "- CPU %% is a share of the whole machine: 100%% means all %s cores are busy." % cores,
+        "- Load average counts tasks running or waiting for CPU or disk. Load that stays above "
+        "the core count (%s) means work is queueing." % cores,
+        "- RAM used is MemTotal minus MemAvailable, so it leaves out cache the kernel can free.",
+        "- Processes are grouped by name (all nginx workers count as one \"nginx\"). Process CPU is "
+        "an average share of the whole machine; process RAM is %s summed over the group. "
+        "Each minute only the top %d processes by CPU and the top %d by RAM are recorded." % (
+            data["proc_mem_metric"], data["top_n"], data["top_n"]),
+        "",
+        "## Summary",
+        "",
+    ]
+    out.extend(md_table(["Metric", "Average", "95th percentile", "Peak"], [
+        ["CPU", fmt_pct(o["cpu_avg"]), fmt_pct(o["cpu_p95"]), peak(o["cpu_max"], o["cpu_max_at"], fmt_pct)],
+        ["Load (1 min)", fmt_load(o["load1_avg"]), "-", peak(o["load1_max"], o["load1_max_at"], fmt_load)],
+        ["Load (15 min)", fmt_load(o["load15_avg"]), "-", peak(o["load15_max"], o["load15_max_at"], fmt_load)],
+        ["RAM used", "%s (%s)" % (fmt_pct(o["mem_avg"]), fmt_kb(o["mem_kb_avg"])), fmt_pct(o["mem_p95"]),
+         peak(o["mem_max"], o["mem_max_at"], fmt_pct)],
+    ]))
+    out += ["", "Time with CPU at or above %d%%: %d min. Time with RAM at or above %d%%: %d min." % (
+        data["cpu_alert"], o["cpu_alert_min"], data["ram_alert"], o["mem_alert_min"]), ""]
+
+    out += ["## Day by day", ""]
+    out.extend(md_table(
+        ["Day", "Coverage", "CPU avg", "CPU p95", "CPU peak", "Load1 avg", "Load1 peak",
+         "RAM avg", "RAM peak", "Top CPU process", "Top RAM process"],
+        [[time.strftime("%a %Y-%m-%d", time.localtime(d["start"])), "%.0f%%" % d["coverage"],
+          fmt_pct(d["cpu_avg"]), fmt_pct(d["cpu_p95"]),
+          "%s %s" % (fmt_pct(d["cpu_max"]), fmt_at(d["cpu_max_at"])), fmt_load(d["load1_avg"]),
+          "%s %s" % (fmt_load(d["load1_max"]), fmt_at(d["load1_max_at"])), fmt_pct(d["mem_avg"]),
+          "%s %s" % (fmt_pct(d["mem_max"]), fmt_at(d["mem_max_at"])),
+          d["top_cpu"][0]["name"] if d["top_cpu"] else "-",
+          d["top_mem"][0]["name"] if d["top_mem"] else "-"] for d in data["days"]]))
+
+    since = data["first_native_ts"]
+    out += ["", "## Top processes over the window" + (
+        " (data since %s)" % fmt_stamp(since) if since and since > data["start"] else ""),
+        "", "By CPU:", ""]
+    if data["top_cpu"]:
+        out.extend(md_table(["#", "Process", "CPU avg", "CPU peak", "Present"], [
+            [i, p["name"], fmt_pct(p["cpu_avg"]), peak(p["cpu_max"], p["cpu_max_at"], fmt_pct),
+             "%.0f%% of the time" % p["seen_pct"]] for i, p in enumerate(data["top_cpu"], 1)]))
+    else:
+        out.append("No process data yet.")
+    out += ["", "By RAM:", ""]
+    if data["top_mem"]:
+        out.extend(md_table(["#", "Process", "RAM avg", "RAM peak", "Max processes"], [
+            [i, p["name"], fmt_kb(p["mem_avg_kb"]), peak(p["mem_max_kb"], p["mem_max_at"], fmt_kb),
+             p["nproc_max"]] for i, p in enumerate(data["top_mem"], 1)]))
+    else:
+        out.append("No process data yet.")
+
+    per_day = [d for d in data["days"] if d["top_cpu"] or d["top_mem"]]
+    if per_day:
+        out += ["", "## Top processes per day", ""]
+        for d in per_day:
+            out.append("- %s. CPU: %s. RAM: %s." % (
+                d["date"],
+                ", ".join("%s %s" % (p["name"], fmt_pct(p["cpu_avg"])) for p in d["top_cpu"]) or "-",
+                ", ".join("%s %s" % (p["name"], fmt_kb(p["mem_avg_kb"])) for p in d["top_mem"]) or "-"))
+
+    step = EXPORT_STEPS[detail]
+    out += ["", "## Time series (%s)" % ("hourly" if step == 3600 else "every 10 minutes"), "",
+            "One row per %s; periods without data are left out. cpu_max is the highest single "
+            "sample in the period; the other columns are averages. ram_used is in MiB." % (
+                "hour" if step == 3600 else "10 minutes"),
+            "", "```csv", "time,cpu_avg,cpu_max,load1,load5,load15,ram_pct,ram_used_mib"]
+    for p in resample(data["series"], step):
+        out.append(",".join([fmt_stamp(p[0]), n(p[1]), n(p[2]), n(p[5], "%.2f"), n(p[6], "%.2f"),
+                             n(p[7], "%.2f"), n(p[3]), n(p[4] and p[4] / 1024.0, "%.0f")]))
+    out += ["```", ""]
+    return "\n".join(out)
+
+
 def render_html(data):
     template_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "dashboard.html")
     with open(template_path) as fh:
@@ -897,11 +1049,18 @@ def serve(cfg, bind, port, token=None):
                 return self.reply(200, "text/html; charset=utf-8", render_html(data).encode("utf-8"))
             if url.path == "/api/summary":
                 return self.reply(200, "application/json", json.dumps(data).encode("utf-8"))
+            if url.path == "/export.md":
+                detail = query.get("detail", ["hour"])[0]
+                body = export_markdown(data, detail if detail in EXPORT_STEPS else "hour")
+                return self.reply(200, "text/markdown; charset=utf-8", body.encode("utf-8"),
+                                  'attachment; filename="%s"' % export_filename(data))
             return self.reply(404, "text/plain", b"not found\n")
 
-        def reply(self, code, ctype, body):
+        def reply(self, code, ctype, body, disposition=None):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            if disposition:
+                self.send_header("Content-Disposition", disposition)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -939,6 +1098,12 @@ def main(argv=None):
     p = sub.add_parser("html", help="write the HTML dashboard to a file")
     p.add_argument("--out", required=True, help="output file")
     p.add_argument("--days", type=int)
+    p = sub.add_parser("export", help="write the history as Markdown, ready to paste into an AI")
+    p.add_argument("--days", type=int, help="window in days (default RETENTION_DAYS)")
+    p.add_argument("--detail", choices=sorted(EXPORT_STEPS), default="hour",
+                   help="time series resolution (default hour)")
+    p.add_argument("--out", help="output file, or a directory for an automatic name "
+                                 "(default: print to stdout)")
     p = sub.add_parser("serve", help="serve the dashboard over HTTP")
     p.add_argument("--bind", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
@@ -976,6 +1141,18 @@ def main(argv=None):
         with open(args.out, "w") as fh:
             fh.write(render_html(summarize(cfg, conn, days=args.days)))
         print("wrote " + args.out)
+    elif args.command == "export":
+        data = summarize(cfg, conn, days=args.days)
+        text = export_markdown(data, args.detail)
+        if not args.out:
+            sys.stdout.write(text)
+        else:
+            path = args.out
+            if os.path.isdir(path):
+                path = os.path.join(path, export_filename(data))
+            with open(path, "w") as fh:
+                fh.write(text)
+            print("wrote %s (%d KB)" % (path, (len(text.encode("utf-8")) + 1023) // 1024))
     elif args.command == "serve":
         if args.bind not in ("127.0.0.1", "localhost", "::1") and not args.token:
             print("warning: serving on %s without --token exposes server metrics" % args.bind,

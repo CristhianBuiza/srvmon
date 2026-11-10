@@ -168,6 +168,30 @@ class SummaryTest(unittest.TestCase):
             self.assertNotIn("</script><b>", html)
             self.assertNotIn("/*__DATA__*/", html)
 
+    def test_export_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_cfg(tmp)
+            conn = srvmon.connect(cfg)
+            now = int(time.time())
+            for i in range(180):
+                insert_sample(conn, now - 60 * (180 - i), 20 + i % 7, 40, 0.5)
+            conn.execute("INSERT INTO proc_samples VALUES (?,?,?,?,?)",
+                         (now - 120, "php|fpm", 3.5, 204800, 4))
+            conn.commit()
+            data = srvmon.summarize(cfg, conn, now=now)
+            md = srvmon.export_markdown(data)
+            self.assertTrue(md.startswith("# Server monitoring export: "))
+            for heading in ("## Summary", "## Day by day", "## Top processes over the window",
+                            "## Time series (hourly)"):
+                self.assertIn(heading, md)
+            self.assertIn("| 1 | php\\|fpm | 200 MiB |", md)
+            csv = md.split("```csv\n")[1].split("```")[0].strip().splitlines()
+            self.assertEqual(csv[0], "time,cpu_avg,cpu_max,load1,load5,load15,ram_pct,ram_used_mib")
+            self.assertTrue(3 <= len(csv) - 1 <= 4)
+            fine = srvmon.export_markdown(data, "10min")
+            self.assertGreater(fine.count("\n"), md.count("\n"))
+            self.assertTrue(srvmon.export_filename(data).endswith(".md"))
+
     def test_html_command_through_symlink(self):
         # install.sh runs the CLI as /usr/local/bin/srvmon -> /opt/srvmon/srvmon.py
         import subprocess

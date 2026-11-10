@@ -109,6 +109,48 @@ ssh -L 8765:127.0.0.1:8765 root@your-server        # from your computer, then op
 
 All times are shown in the server's time zone, whatever time zone the viewer's browser uses.
 
+### Export for an AI assistant
+
+`srvmon export` writes the whole retention window as one Markdown file meant to be pasted into an AI chat (ChatGPT, Claude, Gemini and so on) or attached to it, so you can ask things like "why was CPU high on Saturday afternoon?" or "is this server short on RAM?".
+
+```bash
+srvmon export --out /root/                   # writes /root/srvmon-<label>-<YYYYMMDD-HHMM>.md
+srvmon export > vps-1.md                     # or print to stdout and redirect
+srvmon export --days 3 --detail 10min --out last3days.md
+```
+
+In aaPanel, the plugin's **Export for AI (.md)** button downloads the same file for the selected window. `srvmon serve` offers it at `/export.md` (also linked from the page header), with the same `days` and `detail` parameters.
+
+The file explains its own units, so the AI does not have to guess them. In order, it contains:
+
+1. **Server facts:** label, cores, RAM, number of samples, coverage, and when per-process data starts.
+2. **How to read the numbers:** what CPU %, load and RAM used mean, and how processes are grouped.
+3. **Summary table:** average, 95th percentile and peak (with time) for CPU, load and RAM, plus time spent above the alert thresholds.
+4. **Day-by-day table** with each day's top CPU and top RAM process.
+5. **Top processes** for the window by CPU and by RAM, then a one-line summary per day.
+6. **Time series as CSV**: `time,cpu_avg,cpu_max,load1,load5,load15,ram_pct,ram_used_mib`, hourly by default or every 10 minutes with `--detail 10min`.
+
+A full week is about 13 KB at hourly detail and about 55 KB at 10-minute detail, small enough for any current AI chat. An excerpt:
+
+~~~markdown
+## Summary
+
+| Metric | Average | 95th percentile | Peak |
+|---|---|---|---|
+| CPU | 13.8% | 33.6% | 42.1% at 2026-11-09 12:31 |
+| Load (1 min) | 0.55 | - | 1.68 at 2026-11-09 12:31 |
+| RAM used | 42.8% (1.63 GiB) | 46.7% | 48.4% at 2026-11-09 12:31 |
+
+## Time series (hourly)
+
+```csv
+time,cpu_avg,cpu_max,load1,load5,load15,ram_pct,ram_used_mib
+2026-11-03 12:00,34.7,39.9,1.39,1.28,1.16,46.9,1833
+```
+~~~
+
+The export holds process names and resource figures, but not command-line arguments, environment variables or file contents. Read it before sharing it if your process or server names are sensitive.
+
 ## Configuration
 
 `/etc/srvmon.conf`, one `KEY=VALUE` per line. Changes apply from the next sample; nothing needs restarting.
@@ -135,7 +177,7 @@ The plugin is a thin page on top of the same collector. It appears under **App S
 
 ![The plugin in the App Store list](docs/images/aapanel-store.png)
 
-Inside the plugin you can pick the window (24 hours, 3 or 7 days), refresh, open the dashboard full screen in a new tab, and change the retention. The status line shows how many samples exist, how old the last one is, and whether the timer is active.
+Inside the plugin you can pick the window (24 hours, 3 or 7 days), refresh, open the dashboard full screen in a new tab, download the [AI export](#export-for-an-ai-assistant), and change the retention. The status line shows how many samples exist, how old the last one is, and whether the timer is active.
 
 There are two ways to install it:
 
@@ -144,7 +186,7 @@ There are two ways to install it:
 
 Uninstalling the plugin from the App Store only removes the panel page. The collector and its data stay; see [Upgrade and uninstall](#upgrade-and-uninstall) to remove those.
 
-aaPanel shows a warning for every third-party plugin. srvmon's plugin only reads the srvmon database and writes `RETENTION_DAYS` to `/etc/srvmon.conf`. Its source is [`aapanel-plugin/srvmon/srvmon_main.py`](aapanel-plugin/srvmon/srvmon_main.py), under 100 lines.
+aaPanel shows a warning for every third-party plugin. srvmon's plugin only reads the srvmon database and writes `RETENTION_DAYS` to `/etc/srvmon.conf`. Its source is [`aapanel-plugin/srvmon/srvmon_main.py`](aapanel-plugin/srvmon/srvmon_main.py), about 110 lines.
 
 ## Reusing it on other servers
 
@@ -178,6 +220,7 @@ srvmon collect ──► reads /proc/stat, /proc/loadavg, /proc/meminfo, /proc/<
 /var/lib/srvmon/srvmon.db  (samples, proc_samples, meta)  ── rows older than RETENTION_DAYS deleted on every run
         │
         ├──► srvmon report [--day | --json]     text or JSON
+        ├──► srvmon export                      Markdown for pasting into an AI chat
         ├──► srvmon html / serve                self-contained dashboard (srvmon/dashboard.html template)
         └──► aaPanel plugin                     same dashboard inside the panel
 ```

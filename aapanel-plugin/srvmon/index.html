@@ -11,6 +11,7 @@
     <label>Window <select id="srvmon-days"></select></label>
     <button type="button" class="btn btn-success btn-sm" id="srvmon-refresh">Refresh</button>
     <button type="button" class="btn btn-default btn-sm" id="srvmon-open">Open in new tab</button>
+    <button type="button" class="btn btn-default btn-sm" id="srvmon-export" title="Markdown file with the history, ready to paste into an AI chat">Export for AI (.md)</button>
     <span class="srvmon-status" id="srvmon-status">Loading…</span>
     <label>Keep <input id="srvmon-retention" type="number" min="1" max="90" style="width:64px"> days</label>
     <button type="button" class="btn btn-default btn-sm" id="srvmon-save">Save</button>
@@ -82,6 +83,19 @@
   $("#srvmon-open").on("click", function () {
     if (!lastHtml) return;
     window.open(URL.createObjectURL(new Blob([lastHtml], { type: "text/html" })), "_blank");
+  });
+  $("#srvmon-export").on("click", function () {
+    var $btn = $(this).prop("disabled", true);
+    call("get_export", { days: $("#srvmon-days").val() || 7 }, function (res) {
+      $btn.prop("disabled", false);
+      if (!res.status) { setStatus(res.msg || "Export failed", true); return; }
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([res.text], { type: "text/markdown" }));
+      a.download = res.filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    });
   });
   $("#srvmon-save").on("click", function () {
     var days = parseInt($("#srvmon-retention").val(), 10);
