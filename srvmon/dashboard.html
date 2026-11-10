@@ -259,10 +259,10 @@ function procTable(list, kind, withDay) {
       `<tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td><td>${pct(p.cpu_avg, 2)}<span class="meter" style="width:${Math.max(2, 50 * p.cpu_avg / top)}px;background:var(--cpu)"></span></td>` +
       `<td>${pct(p.cpu_max)}</td><td><small>${fmtAt(p.cpu_max_at)}</small></td></tr>`).join("") + `</table>`;
   }
-  const top = list[0].rss_avg_kb || 1;
-  return `<table><tr><th>Process</th><th>Avg RAM</th><th>Peak</th><th>Peak at</th><th>Procs</th></tr>` + list.map((p) =>
-    `<tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td><td>${kb(p.rss_avg_kb)}<span class="meter" style="width:${Math.max(2, 50 * p.rss_avg_kb / top)}px;background:var(--ram)"></span></td>` +
-    `<td>${kb(p.rss_max_kb)}</td><td><small>${fmtAt(p.rss_max_at)}</small></td><td>${p.nproc_max}</td></tr>`).join("") + `</table>`;
+  const top = list[0].mem_avg_kb || 1;
+  return `<table><tr><th>Process</th><th>Avg RAM (${D.proc_mem_metric})</th><th>Peak</th><th>Peak at</th><th>Procs</th></tr>` + list.map((p) =>
+    `<tr><td class="name" title="${esc(p.name)}">${esc(p.name)}</td><td>${kb(p.mem_avg_kb)}<span class="meter" style="width:${Math.max(2, 50 * p.mem_avg_kb / top)}px;background:var(--ram)"></span></td>` +
+    `<td>${kb(p.mem_max_kb)}</td><td><small>${fmtAt(p.mem_max_at)}</small></td><td>${p.nproc_max}</td></tr>`).join("") + `</table>`;
 }
 
 function kpi(cls, label, value, note) {
@@ -280,7 +280,7 @@ function render() {
     kpi("load", "Load average (1 min)", ld(o.load1_avg), `peak ${ld(o.load1_max)} ${o.load1_max_at ? "on " + when(o.load1_max_at) : ""} · ${D.cores} cores`) +
     kpi("ram", "RAM average", pct(o.mem_avg), `${kb(o.mem_kb_avg)} of ${kb(D.mem_total_kb)} · peak ${pct(o.mem_max)}`) +
     kpi("cpu", "Top CPU process", tc ? esc(tc.name) : "–", tc ? `avg ${pct(tc.cpu_avg, 2)} · peak ${pct(tc.cpu_max)}` : "no process data yet") +
-    kpi("ram", "Top RAM process", tm ? esc(tm.name) : "–", tm ? `avg ${kb(tm.rss_avg_kb)} · peak ${kb(tm.rss_max_kb)}` : "no process data yet") +
+    kpi("ram", "Top RAM process", tm ? esc(tm.name) : "–", tm ? `avg ${kb(tm.mem_avg_kb)} · peak ${kb(tm.mem_max_kb)}` : "no process data yet") +
     kpi("cov", "Data coverage", pct(o.coverage, 0), `${o.samples.toLocaleString()} samples · ${D.counts.native.toLocaleString()} collector, ${D.counts.sysstat.toLocaleString()} sysstat`);
 
   $("week-title").textContent = `Last ${D.window_days} days`;
@@ -303,7 +303,7 @@ function render() {
   $("w-top-cpu").innerHTML = procTable(D.top_cpu, "cpu", true);
   $("w-top-mem").innerHTML = procTable(D.top_mem, "mem", true);
   $("footer").textContent = `srvmon ${D.version} · generated ${when(D.generated_at)} · retention ${D.retention_days} days · ` +
-    `CPU % is the share of all ${D.cores} cores; process RAM is resident memory (RSS) summed over processes with the same name.`;
+    `CPU % is the share of all ${D.cores} cores; process RAM is ${D.proc_mem_metric} summed over processes with the same name.`;
 
   const fromHash = days.findIndex((d) => "#" + d.date === location.hash);
   selectDay(fromHash >= 0 ? fromHash : days.length - 1, false);

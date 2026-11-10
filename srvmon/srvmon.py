@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS proc_samples (
     ts     INTEGER NOT NULL,
     name   TEXT    NOT NULL,
     cpu    REAL    NOT NULL,
-    rss_kb INTEGER NOT NULL,
+    mem_kb INTEGER NOT NULL,
     nproc  INTEGER NOT NULL,
     PRIMARY KEY (ts, name)
 );
@@ -259,8 +259,27 @@ def process_name(pid, comm, ppid):
     return comm
 
 
+def read_pss(pid):
+    try:
+        with open(os.path.join(PROC, pid, "smaps_rollup")) as fh:
+            for line in fh:
+                if line.startswith("Pss:"):
+                    return int(line.split()[1])
+    except (IOError, OSError, ValueError):
+        pass
+    return None
+
+
+def proc_mem_metric():
+    return "PSS" if read_pss("self") is not None else "RSS"
+
+
 def read_processes():
-    """{pid: (name, starttime, ticks, rss_kb)} for every visible process."""
+    """{pid: (name, starttime, ticks, mem_kb)} for every visible process.
+
+    mem_kb is PSS (shared pages split between the processes using them) when
+    smaps_rollup is readable, otherwise RSS.
+    """
     procs = {}
     for entry in os.listdir(PROC):
         if not entry.isdigit():
@@ -273,7 +292,9 @@ def read_processes():
         if parsed is None:
             continue
         comm, ppid, ticks, start, rss = parsed
-        procs[entry] = (process_name(int(entry), comm, ppid), start, ticks, rss)
+        mem = read_pss(entry) if rss else None
+        procs[entry] = (process_name(int(entry), comm, ppid), start, ticks,
+                        rss if mem is None else mem)
     return procs
 
 
@@ -334,19 +355,19 @@ def process_usage(prev, cur, cores):
     prev_procs = prev["procs"]
     prev_uptime_ticks = prev["uptime"] * CLK_TCK
     groups = {}
-    for pid, (name, start, ticks, rss) in cur["procs"].items():
+    for pid, (name, start, ticks, mem) in cur["procs"].items():
         group = groups.setdefault(name, [0, 0, 0])
         old = prev_procs.get(pid)
         if old is not None and old[0] == start:
             group[0] += max(0, ticks - old[1])
         elif start >= prev_uptime_ticks:
             group[0] += ticks  # started during the interval
-        group[1] += rss
+        group[1] += mem
         group[2] += 1
     usage = []
-    for name, (dticks, rss, count) in groups.items():
+    for name, (dticks, mem, count) in groups.items():
         cpu = 100.0 * dticks / CLK_TCK / elapsed / cores if elapsed > 0 else 0.0
-        usage.append((name, round(min(cpu, 100.0), 2), rss, count))
+        usage.append((name, round(min(cpu, 100.0), 2), mem, count))
     return usage
 
 
@@ -381,10 +402,11 @@ def collect(cfg):
              cpu["iowait"], cpu["steal"], load1, load5, load15, mem["total"], mem["used"],
              mem["pct"], mem["swap_total"], mem["swap_used"]))
         conn.executemany("INSERT OR REPLACE INTO proc_samples VALUES (?,?,?,?,?)",
-                         [(ts, name, c, rss, n) for name, c, rss, n in top])
+                         [(ts, name, c, mem, n) for name, c, mem, n in top])
         meta_set(conn, "snapshot", persistable(cur))
         meta_set(conn, "cores", cores)
         meta_set(conn, "mem_total_kb", mem["total"])
+        meta_set(conn, "proc_mem_metric", proc_mem_metric())
     prune(conn, cfg.retention_days)
     conn.close()
     return {"ts": ts, "interval": interval, "cpu": cpu["cpu"], "load1": load1,
@@ -565,22 +587,22 @@ def top_processes(proc_rows, weights, native_seconds, n):
     list; RSS average is over the samples where it was present.
     """
     agg = {}
-    for ts, name, cpu, rss, nproc in proc_rows:
+    for ts, name, cpu, mem, nproc in proc_rows:
         w = weights.get(ts)
         if w is None:
             continue
         a = agg.get(name)
         if a is None:
             a = agg[name] = {"name": name, "cpu_sum": 0.0, "cpu_max": -1.0, "cpu_max_at": ts,
-                             "rss_sum": 0.0, "rss_w": 0, "rss_max": -1, "rss_max_at": ts,
+                             "mem_sum": 0.0, "mem_w": 0, "mem_max": -1, "mem_max_at": ts,
                              "nproc_max": 0}
         a["cpu_sum"] += cpu * w
         if cpu > a["cpu_max"]:
             a["cpu_max"], a["cpu_max_at"] = cpu, ts
-        a["rss_sum"] += rss * w
-        a["rss_w"] += w
-        if rss > a["rss_max"]:
-            a["rss_max"], a["rss_max_at"] = rss, ts
+        a["mem_sum"] += mem * w
+        a["mem_w"] += w
+        if mem > a["mem_max"]:
+            a["mem_max"], a["mem_max_at"] = mem, ts
         a["nproc_max"] = max(a["nproc_max"], nproc)
     items = []
     for a in agg.values():
@@ -589,14 +611,14 @@ def top_processes(proc_rows, weights, native_seconds, n):
             "cpu_avg": _round(a["cpu_sum"] / native_seconds) if native_seconds else None,
             "cpu_max": _round(a["cpu_max"]),
             "cpu_max_at": a["cpu_max_at"],
-            "rss_avg_kb": int(a["rss_sum"] / a["rss_w"]) if a["rss_w"] else None,
-            "rss_max_kb": a["rss_max"],
-            "rss_max_at": a["rss_max_at"],
-            "seen_pct": _round(100.0 * a["rss_w"] / native_seconds, 1) if native_seconds else None,
+            "mem_avg_kb": int(a["mem_sum"] / a["mem_w"]) if a["mem_w"] else None,
+            "mem_max_kb": a["mem_max"],
+            "mem_max_at": a["mem_max_at"],
+            "seen_pct": _round(100.0 * a["mem_w"] / native_seconds, 1) if native_seconds else None,
             "nproc_max": a["nproc_max"],
         })
     by_cpu = sorted((i for i in items if i["cpu_avg"]), key=lambda i: -i["cpu_avg"])[:n]
-    by_ram = sorted((i for i in items if i["rss_avg_kb"]), key=lambda i: -i["rss_avg_kb"])[:n]
+    by_ram = sorted((i for i in items if i["mem_avg_kb"]), key=lambda i: -i["mem_avg_kb"])[:n]
     return by_cpu, by_ram
 
 
@@ -631,7 +653,7 @@ def summarize(cfg, conn, days=None, now=None):
     for r in rows:
         r["w"] = min(r["interval"], MAX_GAP)
     proc_rows = conn.execute(
-        "SELECT ts, name, cpu, rss_kb, nproc FROM proc_samples WHERE ts > ? AND ts <= ?",
+        "SELECT ts, name, cpu, mem_kb, nproc FROM proc_samples WHERE ts > ? AND ts <= ?",
         (start, now)).fetchall()
     weights = dict((r["ts"], r["w"]) for r in rows if r["source"] == "native")
 
@@ -684,6 +706,7 @@ def summarize(cfg, conn, days=None, now=None):
         "cpu_alert": cfg.cpu_alert,
         "ram_alert": cfg.ram_alert,
         "top_n": cfg.top_n,
+        "proc_mem_metric": meta_get(conn, "proc_mem_metric") or "RSS",
         "bucket": BUCKET,
         "counts": {"native": counts.get("native", 0), "sysstat": counts.get("sysstat", 0)},
         "first_ts": first_last[0],
@@ -799,13 +822,13 @@ def process_tables(top_cpu, top_mem, with_day):
             i, p["name"][:32], fmt_pct(p["cpu_avg"]), fmt_pct(p["cpu_max"]),
             fmt_at(p["cpu_max_at"], with_day)))
     out.append("")
-    out.append("Top processes by RAM (resident memory, all processes of the group)")
+    out.append("Top processes by RAM (PSS or RSS, summed over processes with the same name)")
     if not top_mem:
         out.append("  no process data yet (recorded by the srvmon collector only)")
     for i, p in enumerate(top_mem, 1):
         out.append("  %2d. %-32s avg %9s  peak %9s at %s  (up to %d procs)" % (
-            i, p["name"][:32], fmt_kb(p["rss_avg_kb"]), fmt_kb(p["rss_max_kb"]),
-            fmt_at(p["rss_max_at"], with_day), p["nproc_max"]))
+            i, p["name"][:32], fmt_kb(p["mem_avg_kb"]), fmt_kb(p["mem_max_kb"]),
+            fmt_at(p["mem_max_at"], with_day), p["nproc_max"]))
     return out
 
 
