@@ -17,6 +17,7 @@ srvmon is a single Python file (standard library only) that records one sample p
 - [How it works](#how-it-works)
 - [Upgrade and uninstall](#upgrade-and-uninstall)
 - [Troubleshooting](#troubleshooting)
+- [Probar en local (testing locally)](#probar-en-local-testing-locally)
 - [Development](#development)
 
 ## What it records
@@ -251,6 +252,64 @@ sudo /opt/srvmon/uninstall.sh --purge           # remove everything, including c
 | Plugin not listed in aaPanel | Check that `/www/server/panel/plugin/srvmon/info.json` exists, then click **Update App List** in the App Store. |
 | `sysstat: 0 samples imported` | sysstat is not collecting (`/etc/default/sysstat`, `systemctl status sysstat`), or its files are older than the retention window. |
 | Peaks look lower on older days | Backfilled sysstat points are 10-minute averages; srvmon's own samples are 1-minute averages, so short spikes show up higher. |
+
+## Probar en local (testing locally)
+
+Puedes probar srvmon en tu propia máquina Linux sin instalarlo y sin root. Todo se guarda en una carpeta temporal, así que no se toca `/etc` ni `/var/lib`.
+
+**1. Apunta srvmon a una carpeta temporal.** Hazlo en la terminal que vas a usar en los pasos 2 a 4. El archivo de configuración no necesita existir: si falta, se usan los valores por defecto.
+
+```bash
+cd srvmon
+mkdir -p /tmp/srvmon-dev
+export SRVMON_CONFIG=/tmp/srvmon-dev/srvmon.conf SRVMON_DB_PATH=/tmp/srvmon-dev/srvmon.db SRVMON_LABEL=local
+```
+
+**2. Genera datos de prueba ejecutando el recolector varias veces.** Cada ejecución guarda una muestra con el CPU medio desde la anterior, la carga, la RAM y los procesos que más consumen.
+
+```bash
+python3 srvmon/srvmon.py collect
+for i in $(seq 10); do sleep 5; python3 srvmon/srvmon.py collect; done
+```
+
+Para unas gráficas más realistas, déjalo correr una hora con `sleep 60`. Si tu máquina tiene historial de sysstat, `python3 srvmon/srvmon.py import-sysstat` rellena los últimos 7 días de CPU, carga y RAM, aunque sin datos de procesos.
+
+**3. Revisa los datos.**
+
+```bash
+python3 srvmon/srvmon.py status                    # "samples" sube con cada collect
+python3 srvmon/srvmon.py report                    # tabla por día y procesos principales
+python3 srvmon/srvmon.py report --json | head      # lo mismo en JSON
+python3 srvmon/srvmon.py export --out /tmp/srvmon-dev/   # el Markdown para la IA
+```
+
+**4. Abre el dashboard.**
+
+```bash
+python3 srvmon/srvmon.py serve                     # http://127.0.0.1:8765, Ctrl+C para parar
+python3 srvmon/srvmon.py html --out /tmp/srvmon-dev/dashboard.html   # o un archivo estático
+```
+
+Con `serve` en marcha también puedes probar `http://127.0.0.1:8765/export.md` y `http://127.0.0.1:8765/api/summary`.
+
+**5. Ejecuta los tests en una terminal nueva**, o después de `unset SRVMON_CONFIG SRVMON_DB_PATH SRVMON_LABEL`. Las variables `SRVMON_*` sobrescriben la configuración de los tests y los hacen fallar.
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+**6. Para probar el plugin de aaPanel**, construye el zip e impórtalo en un panel de pruebas (App Store → Third-party Plug-ins → Import plugins).
+
+```bash
+./tools/build-plugin-zip.sh                        # crea dist/srvmon-aapanel-plugin.zip
+```
+
+**7. Limpia** cuando termines: `rm -rf /tmp/srvmon-dev`.
+
+Ten en cuenta:
+
+- Solo funciona en Linux, porque lee `/proc`. En macOS o Windows usa una máquina virtual, WSL2 o un contenedor Linux.
+- Sin root, la memoria de los procesos de otros usuarios se mide con RSS en lugar de PSS, así que puede salir algo más alta que en un servidor real. El CPU por proceso se mide igual.
 
 ## Development
 
